@@ -8,13 +8,18 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
@@ -53,6 +58,23 @@ class MainActivity : Activity() {
     )
     private const val PREFS = "browser"
     private const val KEY_DESKTOP = "desktop"
+    private const val KEY_FILL = "fill"
+
+    /** Fill mode: stretch the playing video to cover the whole screen, trimming the edges. */
+    private const val FILL_JS = """
+      (function () {
+        var id = 'vidia-fill', on = %s, el = document.getElementById(id);
+        if (!on) { if (el) el.remove(); return; }
+        if (el) return;
+        el = document.createElement('style');
+        el.id = id;
+        el.textContent =
+          ':fullscreen video, :-webkit-full-screen video, video:fullscreen, video:-webkit-full-screen {' +
+          ' object-fit: cover !important; width: 100%% !important; height: 100%% !important;' +
+          ' left: 0 !important; top: 0 !important; }';
+        (document.head || document.documentElement).appendChild(el);
+      })();
+    """
   }
 
   private lateinit var root: FrameLayout
@@ -64,6 +86,11 @@ class MainActivity : Activity() {
   private lateinit var desktopUserAgent: String
 
   private var fullscreenView: View? = null
+  private var fullscreenFrame: FrameLayout? = null
+  private var fillButton: TextView? = null
+  private var fillMode = false
+  private val handler = Handler(Looper.getMainLooper())
+  private val hideFillButton = Runnable { fillButton?.animate()?.alpha(0f)?.setDuration(250)?.start() }
   private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
   private var desktopMode = false
 
@@ -72,6 +99,7 @@ class MainActivity : Activity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     desktopMode = prefs.getBoolean(KEY_DESKTOP, false)
+    fillMode = prefs.getBoolean(KEY_FILL, false)
     buildUi()
     configureWebView()
 
@@ -242,10 +270,7 @@ class MainActivity : Activity() {
         if (fullscreenView != null) { callback.onCustomViewHidden(); return }
         fullscreenView = view
         fullscreenCallback = callback
-        view.setBackgroundColor(Color.BLACK)
-        root.addView(view, FrameLayout.LayoutParams(
-          ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        setFullscreenUi(true)
+        enterFullscreen(view)
       }
 
       override fun onHideCustomView() = exitFullscreen()
@@ -286,24 +311,108 @@ class MainActivity : Activity() {
     load(webView.url ?: HOME)
   }
 
+  /**
+   * Fullscreen video goes on the window's top-level view (not inside the app layout), drawn
+   * edge to edge over the space normally kept for the system bars, with a Fill/Fit button.
+   */
+  private fun enterFullscreen(video: View) {
+    video.setBackgroundColor(Color.BLACK)
+    val frame = object : FrameLayout(this) {
+      // Any touch brings the Fill button back for a few seconds; the touch still reaches the video.
+      override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) showFillButton()
+        return super.dispatchTouchEvent(ev)
+      }
+    }.apply { setBackgroundColor(Color.BLACK) }
+    frame.addView(video, FrameLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+
+    val button = TextView(this).apply {
+      textSize = 20f
+      typeface = Typeface.DEFAULT_BOLD
+      setTextColor(Color.WHITE)
+      gravity = Gravity.CENTER
+      setPadding(dp(28), dp(14), dp(28), dp(14))
+      background = android.graphics.drawable.GradientDrawable().apply {
+        cornerRadius = dp(28).toFloat()
+        setColor(Color.argb(170, 32, 33, 36))
+      }
+      setOnClickListener { setFill(!fillMode) }
+    }
+    frame.addView(button, FrameLayout.LayoutParams(
+      ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+      Gravity.TOP or Gravity.END).apply { setMargins(0, dp(24), dp(24), 0) })
+    fillButton = button
+    updateFillButton()
+
+    (window.decorView as ViewGroup).addView(frame, FrameLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    fullscreenFrame = frame
+    setFullscreenUi(true)
+    applyFill()
+    showFillButton()
+  }
+
   private fun exitFullscreen() {
-    val view = fullscreenView ?: return
-    root.removeView(view)
+    fullscreenView ?: return
+    handler.removeCallbacks(hideFillButton)
+    fullscreenFrame?.let { (window.decorView as ViewGroup).removeView(it) }
+    fullscreenFrame = null
+    fillButton = null
     fullscreenView = null
     fullscreenCallback?.onCustomViewHidden()
     fullscreenCallback = null
     setFullscreenUi(false)
+    webView.evaluateJavascript(FILL_JS.format("false"), null)
+  }
+
+  private fun setFill(on: Boolean) {
+    fillMode = on
+    prefs.edit().putBoolean(KEY_FILL, on).apply()
+    updateFillButton()
+    applyFill()
+    showFillButton()
+  }
+
+  private fun applyFill() = webView.evaluateJavascript(FILL_JS.format(fillMode.toString()), null)
+
+  private fun updateFillButton() {
+    // The label says what tapping will do.
+    fillButton?.text = if (fillMode) "Fit" else "Fill"
+  }
+
+  private fun showFillButton() {
+    val b = fillButton ?: return
+    b.animate().cancel()
+    b.alpha = 1f
+    handler.removeCallbacks(hideFillButton)
+    handler.postDelayed(hideFillButton, 3000)
   }
 
   @Suppress("DEPRECATION")
   private fun setFullscreenUi(on: Boolean) {
-    window.insetsController?.let { c ->
-      if (on) {
-        c.hide(WindowInsets.Type.systemBars())
-        c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-      } else {
-        c.show(WindowInsets.Type.systemBars())
+    // Let the window cover the cutout and system-bar areas while fullscreen.
+    window.attributes = window.attributes.apply {
+      layoutInDisplayCutoutMode = if (on)
+        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+      else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      window.setDecorFitsSystemWindows(!on)
+      window.insetsController?.let { c ->
+        if (on) {
+          c.hide(WindowInsets.Type.systemBars())
+          c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        } else {
+          c.show(WindowInsets.Type.systemBars())
+        }
       }
+    } else {
+      window.decorView.systemUiVisibility = if (on) {
+        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
+          View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+          View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+      } else 0
     }
   }
 
