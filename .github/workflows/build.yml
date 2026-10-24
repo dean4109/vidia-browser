@@ -1,8 +1,10 @@
-name: Build hCloud Browser (Play bundle)
+name: Build Vidia Browser (Play bundle)
 
-# Actions tab -> "Build hCloud Browser (Play bundle)" -> Run workflow.
-# Needs the same four secrets as hCloud Plezy:
+# Actions tab -> "Build Vidia Browser (Play bundle)" -> Run workflow.
+# Repository secrets (your Play upload key):
 #   ANDROID_KEYSTORE_BASE64, ANDROID_STORE_PASSWORD, ANDROID_KEY_PASSWORD, ANDROID_KEY_ALIAS
+# Repository variable:
+#   APPLICATION_ID - your Play Console package name (defaults to app.vidia.browser)
 
 on:
   workflow_dispatch:
@@ -28,6 +30,7 @@ jobs:
       - name: Build app bundle
         env:
           BUILD_NUMBER: ${{ github.run_number }}
+          APPLICATION_ID: ${{ vars.APPLICATION_ID }}
           KEYSTORE_PATH: ${{ runner.temp }}/upload.jks
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -40,5 +43,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hcloud-browser-aab
+          name: vidia-browser-aab
           path: app/build/outputs/bundle/release/app-release.aab

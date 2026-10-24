@@ -1,4 +1,4 @@
-package hcloud.browser
+package app.vidia.browser
 
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -36,13 +36,20 @@ class MainActivity : Activity() {
 
   companion object {
     /** The start page is bundled in the app and served under this made-up https address. */
-    private const val HOME_HOST = "start.hcloud"
+    private const val HOME_HOST = "start.vidia"
     const val HOME = "https://$HOME_HOST/"
 
     /** Streaming sites that only serve playable pages to desktop browsers. */
     private val DESKTOP_HOSTS = listOf(
       "netflix.com", "hulu.com", "disneyplus.com", "hbomax.com", "max.com",
-      "primevideo.com", "amazon.com", "peacocktv.com", "paramountplus.com", "tv.apple.com"
+      "primevideo.com", "amazon.com", "peacocktv.com", "paramountplus.com", "tv.apple.com",
+      // Services in the start page's "Add a streaming service" list.
+      "crunchyroll.com", "pluto.tv", "tubitv.com", "roku.com", "sling.com", "fubo.tv", "philo.com",
+      "starz.com", "mgmplus.com", "amcplus.com", "britbox.com", "acorn.tv", "shudder.com",
+      "discoveryplus.com", "espn.com", "pbs.org", "kanopy.com", "hoopladigital.com", "mubi.com",
+      "criterionchannel.com", "curiositystream.com", "nebula.tv", "dailymotion.com", "dazn.com",
+      "nba.com", "mlb.com", "nfl.com", "spotify.com", "pandora.com", "siriusxm.com",
+      "iheart.com", "frndlytv.com", "xumo.com", "foxone.com", "plex.tv"
     )
     private const val PREFS = "browser"
     private const val KEY_DESKTOP = "desktop"

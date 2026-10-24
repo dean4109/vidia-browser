@@ -12,5 +12,5 @@ dependencyResolutionManagement {
     mavenCentral()
   }
 }
-rootProject.name = "hcloud-browser"
+rootProject.name = "vidia-browser"
 include(":app")

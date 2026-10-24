@@ -7,11 +7,13 @@ plugins {
 val keystorePath: String? = System.getenv("KEYSTORE_PATH")
 
 android {
-  namespace = "hcloud.browser"
+  namespace = "app.vidia.browser"
   compileSdk = 35
 
   defaultConfig {
-    applicationId = "hcloud.browser"
+    // Your Play Console package name. Set the APPLICATION_ID repository variable
+    // (Settings → Secrets and variables → Actions → Variables) to use your own.
+    applicationId = System.getenv("APPLICATION_ID")?.takeIf { it.isNotBlank() } ?: "app.vidia.browser"
     minSdk = 29
     targetSdk = 35
     versionCode = (System.getenv("BUILD_NUMBER") ?: "1").toInt()

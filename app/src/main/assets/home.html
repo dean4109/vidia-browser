@@ -54,6 +54,13 @@
   form h2 { flex-basis: 100%; margin: 0 0 4px; font-size: 20px; font-weight: 600; }
   form input { flex: 1 1 280px; font-size: 20px; padding: 14px 18px; border-radius: 12px;
     border: 1px solid #55585e; background: #232428; color: var(--text); }
+  form select { flex: 1 1 100%; font-size: 20px; padding: 14px 18px; border-radius: 12px;
+    border: 1px solid #55585e; background: #232428; color: var(--text); }
+  form .or { flex-basis: 100%; margin: 4px 0 0; color: var(--muted); font-size: 15px; }
+  .preview { flex: none; width: 240px; aspect-ratio: 16 / 9; border-radius: 12px; display: flex;
+    align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,.35); }
+  .preview img { width: 66%; height: 42%; object-fit: contain; }
+  .preview span { font-size: 22px; font-weight: 700; }
   form label.color { display: flex; align-items: center; gap: 12px; font-size: 18px; color: var(--muted); }
   form input[type=color] { flex: none; width: 64px; height: 52px; padding: 4px; }
   form .hint { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.45; }
@@ -78,13 +85,18 @@
 
   <form id="tileForm" autocomplete="off">
     <h2 id="formTitle">Add a tile</h2>
-    <input id="name" placeholder="Name (e.g. Crunchyroll)" required>
+    <select id="preset" aria-label="Streaming service">
+      <option value="">Choose a streaming service…</option>
+    </select>
+    <p class="or">…or fill in any website yourself:</p>
+    <input id="name" placeholder="Name (e.g. My local news)" required>
     <input id="url" placeholder="Web address (e.g. crunchyroll.com)" required>
     <input id="logo" placeholder="Logo image address (optional)">
     <label class="color">Card colour <input type="color" id="color" value="#1a73e8"></label>
-    <p class="hint">For the full logo look, paste the address of the service's official logo image
-      (on most press or brand pages: long-press the logo → Copy image address). Leave it blank to
-      show the service's app icon instead. The card colour sits behind whichever is shown.</p>
+    <div class="preview" id="preview" aria-hidden="true"></div>
+    <p class="hint">Picking a service fills everything in. For your own website, paste the address of
+      its logo image if you have one (long-press a logo → Copy image address), or leave it blank to
+      show the site's icon. The preview shows how the tile will look.</p>
     <button type="submit" id="save">Add</button>
     <button type="button" class="secondary" id="cancel">Cancel</button>
   </form>
@@ -93,41 +105,89 @@
 </main>
 
 <script>
-  // Built-in tiles: Harrison's chosen card colours and official logos (loaded live from Brandfetch).
-  const BF = "?c=1dxbfHSJFAPEGdCLU4o5B";
+  // Logos are hotlinked from Brandfetch's logo CDN. If you fork this project, put your own
+  // Brandfetch client ID here (free at developers.brandfetch.com).
+  const BRANDFETCH_CLIENT_ID = "1dxbfHSJFAPEGdCLU4o5B";
+  const bf = path => "https://cdn.brandfetch.io/" + path + "?c=" + BRANDFETCH_CLIENT_ID;
+
+  // Tiles on a fresh install.
   const DEFAULTS = [
-    { name: "YouTube",     url: "https://m.youtube.com/",         color: "#000000",
-      logo: "https://cdn.brandfetch.io/idVfYwcuQz/theme/dark/logo.svg" + BF },
-    { name: "Netflix",     url: "https://www.netflix.com/browse", color: "#000000",
-      logo: "https://cdn.brandfetch.io/ideQwN5lBE/theme/dark/logo.svg" + BF },
-    { name: "Hulu",        url: "https://www.hulu.com/hub/home",  color: "#000000",
-      logo: "https://cdn.brandfetch.io/id4KRloCCr/theme/dark/logo.svg" + BF },
-    { name: "Disney+",     url: "https://www.disneyplus.com/",    color: "#113ccf",
-      logo: "https://cdn.brandfetch.io/idhQlYRiX2/theme/light/logo.svg" + BF },
-    { name: "HBO Max",     url: "https://www.hbomax.com/",        color: "#0b1660",
-      logo: "https://cdn.brandfetch.io/idKKo6p4ks/theme/light/logo.svg" + BF },
-    { name: "Plex",        url: "https://app.plex.tv/",           color: "#1a1b1e",
-      logo: "https://cdn.brandfetch.io/id6OgdnqKb/theme/light/logo.svg" + BF },
-    { name: "Prime Video", url: "https://www.primevideo.com/",    color: "#00a8e1",
-      logo: "https://cdn.brandfetch.io/idXRXV6qi8/w/320/h/60/theme/light/logo.png" + BF },
-    { name: "Peacock",     url: "https://www.peacocktv.com/",     color: "#000000",
-      logo: "https://cdn.brandfetch.io/idIaTUzyS6/theme/light/logo.svg" + BF },
-    { name: "Paramount+",  url: "https://www.paramountplus.com/", color: "#0064ff",
-      logo: "https://cdn.brandfetch.io/idU9biO3N_/theme/light/logo.svg" + BF },
-    { name: "Apple TV",    url: "https://tv.apple.com/",          color: "#000000",
-      logo: "https://cdn.brandfetch.io/idnrCPuv87/theme/light/logo.svg" + BF },
-    { name: "Twitch",      url: "https://www.twitch.tv/",         color: "#000000",
-      logo: "https://cdn.brandfetch.io/idIwZCwD2f/theme/dark/logo.svg" + BF }
+    { name: "YouTube",     url: "https://m.youtube.com/",         color: "#000000", logo: bf("idVfYwcuQz/theme/light/logo.svg") },
+    { name: "Netflix",     url: "https://www.netflix.com/browse", color: "#000000", logo: bf("ideQwN5lBE/theme/dark/logo.svg") },
+    { name: "Hulu",        url: "https://www.hulu.com/hub/home",  color: "#000000", logo: bf("id4KRloCCr/theme/dark/logo.svg") },
+    { name: "Disney+",     url: "https://www.disneyplus.com/",    color: "#113ccf", logo: bf("idhQlYRiX2/theme/light/logo.svg") },
+    { name: "HBO Max",     url: "https://www.hbomax.com/",        color: "#0b1660", logo: bf("idKKo6p4ks/theme/light/logo.svg") },
+    { name: "Plex",        url: "https://app.plex.tv/",           color: "#1a1b1e", logo: bf("id6OgdnqKb/theme/light/logo.svg") },
+    { name: "Prime Video", url: "https://www.primevideo.com/",    color: "#00a8e1", logo: bf("idXRXV6qi8/w/320/h/60/theme/light/logo.png") },
+    { name: "Peacock",     url: "https://www.peacocktv.com/",     color: "#000000", logo: bf("idIaTUzyS6/theme/light/logo.svg") },
+    { name: "Paramount+",  url: "https://www.paramountplus.com/", color: "#0064ff", logo: bf("idU9biO3N_/theme/light/logo.svg") },
+    { name: "Apple TV",    url: "https://tv.apple.com/",          color: "#000000", logo: bf("idnrCPuv87/theme/light/logo.svg") },
+    { name: "Twitch",      url: "https://www.twitch.tv/",         color: "#000000", logo: bf("idIwZCwD2f/theme/dark/logo.svg") }
   ];
+
+  // The "Choose a streaming service" list. A light-theme (light-coloured) logo goes on a dark
+  // card; a dark-theme logo goes on a light card, so every logo stays readable.
+  const CATALOG = [
+    { group: "Movies & TV", items: [
+      { name: "Acorn TV",          url: "https://acorn.tv/",                   color: "#004a59", logo: bf("idEPEiujKK/theme/light/logo.svg") },
+      { name: "AMC+",              url: "https://www.amcplus.com/",            color: "#091523", logo: bf("id7WWiNV8Z/w/887/h/460/theme/light/logo.png") },
+      { name: "BritBox",           url: "https://www.britbox.com/",            color: "#66d3eb", logo: bf("idaC0BJCtq/theme/dark/logo.svg") },
+      { name: "Criterion Channel", url: "https://www.criterionchannel.com/",   color: "#000000", logo: bf("idZo7O163q/w/260/h/84/theme/light/logo.png") },
+      { name: "Crunchyroll",       url: "https://www.crunchyroll.com/",        color: "#000000", logo: bf("id0XKwSDEq/theme/light/logo.svg") },
+      { name: "Curiosity Stream",  url: "https://curiositystream.com/",        color: "#ffffff", logo: bf("id1y284_kn/theme/dark/logo.svg") },
+      { name: "Dailymotion",       url: "https://www.dailymotion.com/",        color: "#0d0d0d", logo: bf("idTds90B2M/theme/light/logo.svg") },
+      { name: "discovery+",        url: "https://www.discoveryplus.com/",      color: "#1968c7", logo: bf("idcHAz42kB/w/800/h/148/theme/light/logo.png") },
+      { name: "hoopla",            url: "https://www.hoopladigital.com/",      color: "#ffffff", logo: bf("idfr7FlnEA/theme/dark/logo.svg") },
+      { name: "Kanopy",            url: "https://www.kanopy.com/",             color: "#ffffff", logo: bf("id_nqOj5-G/w/3225/h/962/theme/dark/logo.png") },
+      { name: "MGM+",              url: "https://www.mgmplus.com/",            color: "#ffffff", logo: bf("idXKukalWe/theme/dark/logo.svg") },
+      { name: "MUBI",              url: "https://mubi.com/",                   color: "#001489", logo: bf("idqvTZv-VR/w/400/h/400/theme/dark/icon.png") },
+      { name: "Nebula",            url: "https://nebula.tv/",                  color: "#ffffff", logo: bf("idBVIgRqWj/w/324/h/307/theme/dark/logo.png") },
+      { name: "PBS",               url: "https://www.pbs.org/",                color: "#486cd8", logo: bf("idJNPR8EcX/theme/light/logo.svg") },
+      { name: "Shudder",           url: "https://www.shudder.com/",            color: "#ffffff", logo: bf("idKcng2P-t/theme/dark/logo.svg") },
+      { name: "STARZ",             url: "https://www.starz.com/",              color: "#ffffff", logo: bf("id3xChfIA_/theme/dark/logo.svg") },
+      { name: "Vimeo",             url: "https://vimeo.com/",                  color: "#1ab7ea", logo: bf("idheAw_tFb/theme/light/logo.svg") }
+    ]},
+    { group: "Free TV", items: [
+      { name: "Pluto TV",          url: "https://pluto.tv/",                   color: "#fff200", logo: bf("idmmjo4Iuh/theme/dark/logo.svg") },
+      { name: "The Roku Channel",  url: "https://therokuchannel.roku.com/",    color: "#662d91", logo: bf("idgsqETs2x/theme/light/logo.svg") },
+      { name: "Tubi",              url: "https://tubitv.com/",                 color: "#ffffff", logo: bf("idJuMIXs2z/w/180/h/180/theme/dark/logo.png") },
+      { name: "Xumo Play",         url: "https://play.xumo.com/",              color: "#ffffff", logo: bf("idppqTah7u/theme/dark/logo.svg") }
+    ]},
+    { group: "Live TV", items: [
+      { name: "FOX One",           url: "https://www.foxone.com/",             color: "#ffffff", logo: bf("idVeHQjwjX/w/240/h/240/theme/dark/logo.png") },
+      { name: "Frndly TV",         url: "https://www.frndlytv.com/",           color: "#ffffff", logo: bf("idD0A1sctW/w/206/h/50/theme/dark/logo.png") },
+      { name: "Fubo",              url: "https://www.fubo.tv/",                color: "#ffffff", logo: bf("idcTudMYje/theme/dark/logo.svg") },
+      { name: "Philo",             url: "https://www.philo.com/",              color: "#0f0e0e", logo: bf("ideIyTlz5g/theme/light/logo.svg") },
+      { name: "Sling TV",          url: "https://www.sling.com/",              color: "#000000", logo: bf("idzAifP7Tq/theme/light/logo.svg") }
+    ]},
+    { group: "Sports", items: [
+      { name: "DAZN",              url: "https://www.dazn.com/",               color: "#ffffff", logo: bf("idOS9tkKt4/theme/dark/logo.svg") },
+      { name: "ESPN",              url: "https://www.espn.com/watch/",         color: "#000000", logo: bf("idP3QUGHob/theme/light/logo.svg") },
+      { name: "Kick",              url: "https://kick.com/",                   color: "#000000", logo: bf("id3gkQXO6j/theme/dark/logo.svg") },
+      { name: "MLB.TV",            url: "https://www.mlb.com/tv",              color: "#ffffff", logo: bf("id-7eKxeIj/theme/dark/logo.svg") },
+      { name: "NBA League Pass",   url: "https://www.nba.com/watch/league-pass-stream", color: "#000000", logo: bf("idFBraEt77/theme/light/logo.svg") },
+      { name: "NFL+",              url: "https://www.nfl.com/plus/",           color: "#ffffff", logo: bf("id8A7s3HN0/theme/dark/logo.svg") }
+    ]},
+    { group: "Music & Radio", items: [
+      { name: "iHeartRadio",       url: "https://www.iheart.com/",             color: "#ffffff", logo: bf("idRviceOzh/theme/dark/logo.svg") },
+      { name: "Pandora",           url: "https://www.pandora.com/",            color: "#224099", logo: bf("idL-UAvQjy/theme/light/logo.svg") },
+      { name: "SiriusXM",          url: "https://www.siriusxm.com/player",     color: "#0000eb", logo: bf("idT2hMYECo/theme/light/logo.svg") },
+      { name: "SoundCloud",        url: "https://soundcloud.com/",             color: "#121212", logo: bf("id3ytDFop3/theme/light/logo.svg") },
+      { name: "Spotify",           url: "https://open.spotify.com/",           color: "#191414", logo: bf("id20mQyGeY/w/2048/h/561/theme/light/logo.png") }
+    ]}
+  ];
+  // The built-in tiles are offered too, so a removed one is easy to bring back.
+  CATALOG.unshift({ group: "Built-in", items: DEFAULTS });
+
   const PALETTE = ["#1a73e8", "#188038", "#c5221f", "#9334e6", "#e37400", "#007b83", "#b3261e", "#5f6368"];
-  const KEY = "tiles.v3";
+  const KEY = "tiles.v4";
 
   function loadTiles() {
     try {
       const saved = JSON.parse(localStorage.getItem(KEY));
       if (Array.isArray(saved)) return saved;
       // First run of this version: fresh built-ins, plus any tiles added in an earlier version.
-      for (const oldKey of ["tiles.v2", "tiles.v1"]) {
+      for (const oldKey of ["tiles.v3", "tiles.v2", "tiles.v1"]) {
         const old = JSON.parse(localStorage.getItem(oldKey));
         if (Array.isArray(old)) {
           const mine = old.filter(t => !DEFAULTS.some(d => d.name === t.name));
@@ -235,6 +295,65 @@
     grid.appendChild(add);
   }
 
+  const preset = f("preset");
+  const allPresets = CATALOG.flatMap(g => g.items);
+
+  // Fill the dropdown (grouped), greying out services that already have a tile.
+  function fillPresets() {
+    while (preset.children.length > 1) preset.lastChild.remove();
+    const onPage = new Set(tiles.map(t => t.name));
+    CATALOG.forEach(g => {
+      const og = document.createElement("optgroup");
+      og.label = g.group;
+      g.items.forEach(item => {
+        const o = document.createElement("option");
+        o.value = item.name;
+        o.textContent = onPage.has(item.name) ? item.name + "  (on your page)" : item.name;
+        o.disabled = onPage.has(item.name) && (editingIndex < 0 || tiles[editingIndex].name !== item.name);
+        og.appendChild(o);
+      });
+      preset.appendChild(og);
+    });
+  }
+
+  preset.addEventListener("change", () => {
+    const item = allPresets.find(p => p.name === preset.value);
+    if (!item) return;
+    f("name").value = item.name;
+    f("url").value = item.url;
+    f("logo").value = item.logo;
+    f("color").value = item.color;
+    updatePreview();
+  });
+  // Typing in the fields means a custom tile, so clear the dropdown.
+  ["name", "url", "logo"].forEach(id => f(id).addEventListener("input", () => {
+    preset.value = ""; updatePreview();
+  }));
+  f("color").addEventListener("input", updatePreview);
+
+  function updatePreview() {
+    const pv = f("preview");
+    const bg = f("color").value;
+    pv.textContent = "";
+    pv.style.background = bg;
+    pv.style.color = textOn(bg);
+    const name = f("name").value.trim() || "Preview";
+    const logo = f("logo").value.trim();
+    const url = f("url").value.trim();
+    const label = () => { pv.textContent = ""; const s = document.createElement("span"); s.textContent = name; pv.appendChild(s); };
+    if (!logo && !url) { label(); return; }
+    const img = document.createElement("img");
+    img.alt = "";
+    img.onerror = () => {
+      if (logo && img.dataset.stage !== "icon" && url) {
+        img.dataset.stage = "icon"; img.src = iconFor(withScheme(url));
+      } else label();
+    };
+    img.src = logo ? withScheme(logo) : iconFor(withScheme(url));
+    if (!logo) img.dataset.stage = "icon";
+    pv.appendChild(img);
+  }
+
   function openForm(index) {
     editingIndex = index;
     const t = index >= 0 ? tiles[index]
@@ -245,6 +364,9 @@
     f("url").value = t.url || "";
     f("logo").value = t.logo || "";
     f("color").value = /^#[0-9a-f]{6}$/i.test(t.color || "") ? t.color : "#1a73e8";
+    fillPresets();
+    preset.value = index >= 0 && allPresets.some(p => p.name === t.name) ? t.name : "";
+    updatePreview();
     form.classList.add("open");
     form.scrollIntoView({ behavior: "smooth", block: "center" });
   }
