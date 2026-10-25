@@ -18,7 +18,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -61,21 +60,66 @@ class MainActivity : Activity() {
     private const val KEY_DESKTOP = "desktop"
     private const val KEY_FILL = "fill"
 
-    /** Fill mode: stretch the playing video to cover the whole screen, trimming the edges. */
+    /**
+     * Fill mode: zoom the main video (only) until it covers the whole screen, trimming the edges.
+     * Uses a transform so the site's own player layout and controls are left untouched, and
+     * re-checks every second because players resize and swap videos.
+     */
     private const val FILL_JS = """
       (function () {
-        var id = 'vidia-fill', on = %s, el = document.getElementById(id);
-        if (!on) { if (el) el.remove(); return; }
-        if (el) return;
-        el = document.createElement('style');
-        el.id = id;
-        el.textContent =
-          ':fullscreen video, :-webkit-full-screen video, video:fullscreen, video:-webkit-full-screen {' +
-          ' object-fit: cover !important; width: 100%% !important; height: 100%% !important;' +
-          ' left: 0 !important; top: 0 !important; }';
-        (document.head || document.documentElement).appendChild(el);
+        var on = %s;
+        if (window.__vidiaFillTimer) { clearInterval(window.__vidiaFillTimer); window.__vidiaFillTimer = null; }
+        var vids = function () { return Array.prototype.slice.call(document.querySelectorAll('video')); };
+        var reset = function (v) {
+          if (!v.__vidiaFill) return;
+          v.style.removeProperty('transform');
+          v.style.removeProperty('transform-origin');
+          v.__vidiaFill = false;
+        };
+        if (!on) { vids().forEach(reset); return; }
+        var pick = function () {
+          var main = document.querySelector('video.html5-main-video');
+          if (main && main.videoWidth) return main;
+          var best = null, area = 0;
+          vids().forEach(function (v) {
+            var cs = getComputedStyle(v);
+            if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return;
+            if (cs.filter && cs.filter !== 'none') return;
+            if (!v.videoWidth) return;
+            var a = v.offsetWidth * v.offsetHeight;
+            if (a > area) { area = a; best = v; }
+          });
+          return best;
+        };
+        var apply = function () {
+          var v = pick();
+          vids().forEach(function (o) { if (o !== v) reset(o); });
+          if (!v) return;
+          var w = v.offsetWidth, h = v.offsetHeight, vw = v.videoWidth, vh = v.videoHeight;
+          if (!w || !h || !vw || !vh) return;
+          var k = Math.min(w / vw, h / vh);
+          var s = Math.max(window.innerWidth / (vw * k), window.innerHeight / (vh * k));
+          if (!isFinite(s) || s < 1.001) s = 1;
+          v.style.setProperty('transform-origin', '50%% 50%%', 'important');
+          v.style.setProperty('transform', 'scale(' + s.toFixed(4) + ')', 'important');
+          v.__vidiaFill = true;
+        };
+        apply();
+        window.__vidiaFillTimer = setInterval(apply, 1000);
       })();
     """
+
+    /** Window layout Flutter apps such as Plezy use: always drawn behind the car's status bar. */
+    @Suppress("DEPRECATION")
+    private const val BASE_UI_FLAGS =
+      View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+
+    /** Flutter's "immersive sticky": bars hidden, swipe from the edge to peek at them. */
+    @Suppress("DEPRECATION")
+    private const val IMMERSIVE_UI_FLAGS =
+      View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_FULLSCREEN
   }
 
   private lateinit var root: FrameLayout
@@ -91,7 +135,6 @@ class MainActivity : Activity() {
   private var fullscreenFrame: FrameLayout? = null
   private var fillButton: TextView? = null
   private var fillMode = false
-  private var savedFitInsetsTypes: Int? = null
   private val handler = Handler(Looper.getMainLooper())
   private val hideFillButton = Runnable { fillButton?.animate()?.alpha(0f)?.setDuration(250)?.start() }
   private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
@@ -104,6 +147,7 @@ class MainActivity : Activity() {
     desktopMode = prefs.getBoolean(KEY_DESKTOP, false)
     fillMode = prefs.getBoolean(KEY_FILL, false)
     buildUi()
+    applyBaseWindowLayout()
     configureWebView()
 
     if (savedInstanceState != null) {
@@ -194,7 +238,11 @@ class MainActivity : Activity() {
       addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
-    root = FrameLayout(this).apply { addView(column) }
+    // The area behind the car's status bar shows the toolbar colour.
+    root = FrameLayout(this).apply {
+      setBackgroundColor(Color.rgb(32, 33, 36))
+      addView(column)
+    }
     setContentView(root)
   }
 
@@ -332,7 +380,12 @@ class MainActivity : Activity() {
         if (ev.actionMasked == MotionEvent.ACTION_DOWN) showFillButton()
         return super.dispatchTouchEvent(ev)
       }
-    }.apply { setBackgroundColor(Color.BLACK) }
+    }.apply {
+      setBackgroundColor(Color.BLACK)
+      fitsSystemWindows = false
+    }
+    video.fitsSystemWindows = false
+    video.setPadding(0, 0, 0, 0)
     frame.addView(video, FrameLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
@@ -358,7 +411,7 @@ class MainActivity : Activity() {
       val (left, top) = reservedTopLeft(insets)
       (button.layoutParams as FrameLayout.LayoutParams).setMargins(left + dp(24), top + dp(24), 0, 0)
       button.requestLayout()
-      insets
+      consumeAll(insets)
     }
     fillButton = button
     updateFillButton()
@@ -389,7 +442,7 @@ class MainActivity : Activity() {
     fillMode = on
     prefs.edit().putBoolean(KEY_FILL, on).apply()
     updateFillButton()
-    applyFill()
+    if (fullscreenView != null) applyFill()
     showFillButton()
   }
 
@@ -430,43 +483,35 @@ class MainActivity : Activity() {
   }
 
   @Suppress("DEPRECATION")
+  private fun applyBaseWindowLayout() {
+    // Same setup FlutterActivity (and so Plezy) uses: the window always extends behind the car's
+    // status bar, which floats over it. That lets fullscreen video use the bar's space once the
+    // bar hides. Our own UI is padded down so the toolbar sits below the bar.
+    window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+    window.statusBarColor = Color.TRANSPARENT
+    window.decorView.systemUiVisibility = BASE_UI_FLAGS
+    root.setOnApplyWindowInsetsListener { v, insets ->
+      v.setPadding(0, statusBarTop(insets), 0, 0)
+      insets
+    }
+    root.requestApplyInsets()
+  }
+
+  @Suppress("DEPRECATION")
+  private fun statusBarTop(insets: WindowInsets): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R)
+      insets.getInsetsIgnoringVisibility(WindowInsets.Type.statusBars()).top
+    else insets.stableInsetTop
+
+  @Suppress("DEPRECATION")
+  private fun consumeAll(insets: WindowInsets): WindowInsets =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) WindowInsets.CONSUMED
+    else insets.consumeSystemWindowInsets().consumeStableInsets().consumeDisplayCutout()
+
+  @Suppress("DEPRECATION")
   private fun setFullscreenUi(on: Boolean) {
-    // Same recipe as Plezy's (Flutter's) "immersive sticky" mode, which GM's system honours:
-    // the window grows into the status-bar area, the bars hide, and a swipe from the top edge
-    // shows GM's bar temporarily over the video.
-    window.attributes = window.attributes.apply {
-      layoutInDisplayCutoutMode = if (on)
-        WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-      else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        // Let the window frame itself cover the bars' space, not just the views inside it.
-        if (on) {
-          if (savedFitInsetsTypes == null) savedFitInsetsTypes = fitInsetsTypes
-          fitInsetsTypes = 0
-        } else savedFitInsetsTypes?.let { fitInsetsTypes = it; savedFitInsetsTypes = null }
-      }
-    }
-    if (on) window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-    else window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
-
-    // The legacy flags are what make the window lay out full-height (Flutter uses them too).
-    window.decorView.systemUiVisibility = if (on) {
-      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
-        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-    } else 0
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      window.setDecorFitsSystemWindows(!on)
-      window.insetsController?.let { c ->
-        if (on) {
-          c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-          c.hide(WindowInsets.Type.systemBars())
-        } else {
-          c.show(WindowInsets.Type.systemBars())
-        }
-      }
-    }
+    // Flutter's immersiveSticky / edge-to-edge flags, which GM's system honours for Plezy.
+    window.decorView.systemUiVisibility = if (on) IMMERSIVE_UI_FLAGS else BASE_UI_FLAGS
   }
 
   private fun navigate(input: String) {
