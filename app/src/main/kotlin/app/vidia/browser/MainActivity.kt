@@ -35,6 +35,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import java.io.ByteArrayInputStream
 
 class MainActivity : Activity() {
@@ -82,6 +83,7 @@ class MainActivity : Activity() {
   private lateinit var urlBar: EditText
   private lateinit var progress: ProgressBar
   private lateinit var desktopButton: TextView
+  private lateinit var fillToolbarButton: TextView
   private lateinit var mobileUserAgent: String
   private lateinit var desktopUserAgent: String
 
@@ -160,6 +162,10 @@ class MainActivity : Activity() {
     }
 
     desktopButton = toolbarButton("") { toggleDesktop() }.apply { textSize = 16f }
+    fillToolbarButton = toolbarButton("") { setFill(!fillMode) }.apply {
+      textSize = 16f
+      typeface = Typeface.DEFAULT_BOLD
+    }
     updateDesktopLabel()
 
     toolbar.addView(toolbarButton("←") { if (webView.canGoBack()) webView.goBack() })
@@ -169,6 +175,7 @@ class MainActivity : Activity() {
     toolbar.addView(urlBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
       marginStart = dp(8); marginEnd = dp(8)
     })
+    toolbar.addView(fillToolbarButton)
     toolbar.addView(desktopButton)
 
     progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -193,6 +200,7 @@ class MainActivity : Activity() {
   private fun updateDesktopLabel() {
     desktopButton.text = if (desktopMode) "Desktop" else "Mobile"
     desktopButton.typeface = Typeface.DEFAULT_BOLD
+    updateFillButton()
   }
 
   // ---------- WebView ----------
@@ -338,16 +346,26 @@ class MainActivity : Activity() {
         setColor(Color.argb(170, 32, 33, 36))
       }
       setOnClickListener { setFill(!fillMode) }
+      // Long-press shows the fullscreen size and reserved edges (handy when tuning a new car).
+      setOnLongClickListener { showFullscreenInfo(); true }
     }
     frame.addView(button, FrameLayout.LayoutParams(
       ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-      Gravity.TOP or Gravity.END).apply { setMargins(0, dp(24), dp(24), 0) })
+      Gravity.TOP or Gravity.START).apply { setMargins(dp(24), dp(24), 0, 0) })
+    // Keep the button clear of the car's status/system areas, even while they're hidden.
+    frame.setOnApplyWindowInsetsListener { _, insets ->
+      val (left, top) = reservedTopLeft(insets)
+      (button.layoutParams as FrameLayout.LayoutParams).setMargins(left + dp(24), top + dp(24), 0, 0)
+      button.requestLayout()
+      insets
+    }
     fillButton = button
     updateFillButton()
 
     (window.decorView as ViewGroup).addView(frame, FrameLayout.LayoutParams(
       ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     fullscreenFrame = frame
+    frame.requestApplyInsets()
     setFullscreenUi(true)
     applyFill()
     showFillButton()
@@ -377,8 +395,29 @@ class MainActivity : Activity() {
   private fun applyFill() = webView.evaluateJavascript(FILL_JS.format(fillMode.toString()), null)
 
   private fun updateFillButton() {
-    // The label says what tapping will do.
-    fillButton?.text = if (fillMode) "Fit" else "Fill"
+    // In fullscreen the label says what tapping will do; the toolbar shows the current setting.
+    fillButton?.text = if (fillMode) "Fit video" else "Fill screen"
+    if (::fillToolbarButton.isInitialized) fillToolbarButton.text = if (fillMode) "Fill" else "Fit"
+  }
+
+  @Suppress("DEPRECATION")
+  private fun reservedTopLeft(insets: WindowInsets): Pair<Int, Int> =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      val r = insets.getInsetsIgnoringVisibility(
+        WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+      r.left to r.top
+    } else insets.systemWindowInsetLeft to insets.systemWindowInsetTop
+
+  private fun showFullscreenInfo() {
+    val frame = fullscreenFrame ?: return
+    val insets = frame.rootWindowInsets
+    val (left, top) = insets?.let { reservedTopLeft(it) } ?: (0 to 0)
+    val loc = IntArray(2).also { frame.getLocationOnScreen(it) }
+    val screen = resources.displayMetrics
+    Toast.makeText(this,
+      "Fullscreen ${frame.width}×${frame.height} at ${loc[0]},${loc[1]} · " +
+        "screen ${screen.widthPixels}×${screen.heightPixels} · reserved left $left, top $top",
+      Toast.LENGTH_LONG).show()
   }
 
   private fun showFillButton() {
