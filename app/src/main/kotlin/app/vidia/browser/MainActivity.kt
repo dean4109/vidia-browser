@@ -91,6 +91,7 @@ class MainActivity : Activity() {
   private var fullscreenFrame: FrameLayout? = null
   private var fillButton: TextView? = null
   private var fillMode = false
+  private var savedFitInsetsTypes: Int? = null
   private val handler = Handler(Looper.getMainLooper())
   private val hideFillButton = Runnable { fillButton?.animate()?.alpha(0f)?.setDuration(250)?.start() }
   private var fullscreenCallback: WebChromeClient.CustomViewCallback? = null
@@ -430,28 +431,41 @@ class MainActivity : Activity() {
 
   @Suppress("DEPRECATION")
   private fun setFullscreenUi(on: Boolean) {
-    // Let the window cover the cutout and system-bar areas while fullscreen.
+    // Same recipe as Plezy's (Flutter's) "immersive sticky" mode, which GM's system honours:
+    // the window grows into the status-bar area, the bars hide, and a swipe from the top edge
+    // shows GM's bar temporarily over the video.
     window.attributes = window.attributes.apply {
       layoutInDisplayCutoutMode = if (on)
         WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
       else WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_DEFAULT
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        // Let the window frame itself cover the bars' space, not just the views inside it.
+        if (on) {
+          if (savedFitInsetsTypes == null) savedFitInsetsTypes = fitInsetsTypes
+          fitInsetsTypes = 0
+        } else savedFitInsetsTypes?.let { fitInsetsTypes = it; savedFitInsetsTypes = null }
+      }
     }
+    if (on) window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+    else window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+
+    // The legacy flags are what make the window lay out full-height (Flutter uses them too).
+    window.decorView.systemUiVisibility = if (on) {
+      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
+        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+        View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+    } else 0
+
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
       window.setDecorFitsSystemWindows(!on)
       window.insetsController?.let { c ->
         if (on) {
-          c.hide(WindowInsets.Type.systemBars())
           c.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+          c.hide(WindowInsets.Type.systemBars())
         } else {
           c.show(WindowInsets.Type.systemBars())
         }
       }
-    } else {
-      window.decorView.systemUiVisibility = if (on) {
-        View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or View.SYSTEM_UI_FLAG_FULLSCREEN or
-          View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-          View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-      } else 0
     }
   }
 
