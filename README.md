@@ -12,6 +12,9 @@ installed through your own Google Play Console internal-testing track.
   copy-protected (Widevine) video is allowed to play wherever the service supports web browsers.
 - Back / forward / reload, an address bar that also searches, and a Mobile/Desktop site toggle.
 - **Edge-to-edge fullscreen video** with a **Fill / Fit** button (Fill zooms the video to cover the whole screen, trimming the edges; your choice is remembered).
+- **Fits curved screens:** pages stay clear of any curved or cut screen edge the car reports. If a
+  car doesn't report it (the toolbar's right-hand buttons are cut off), long-press **⌂** and drag the
+  **Screen edge** slider until they show; the setting is remembered.
 - Uses the car's built-in Android System WebView, so the app stays tiny.
 - Not marked distraction-optimized, so the car only allows it while parked.
 

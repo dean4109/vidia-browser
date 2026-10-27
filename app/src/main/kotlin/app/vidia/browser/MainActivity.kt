@@ -2,10 +2,12 @@ package app.vidia.browser
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Insets
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
@@ -15,6 +17,7 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.view.RoundedCorner
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
@@ -33,9 +36,11 @@ import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import java.io.ByteArrayInputStream
+import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
 
@@ -60,28 +65,45 @@ class MainActivity : Activity() {
     private const val KEY_DESKTOP = "desktop"
     private const val KEY_FILL = "fill"
 
+    /** Right-edge margin set with long-press ⌂, in dp; absent means "use what the car reports". */
+    private const val KEY_EDGE = "edge_right_dp"
+
     /**
      * Fill mode: zoom the main video (only) until it covers the whole screen, trimming the edges.
-     * Uses a transform so the site's own player layout and controls are left untouched, and
-     * re-checks every second because players resize and swap videos.
+     * Uses a transform so the site's own player layout and controls are left untouched.
+     *
+     * The zoom lives in a stylesheet rule aimed at a data attribute on the video, never in the
+     * video's own style attribute: players such as YouTube keep rewriting that attribute, which
+     * wiped an inline zoom straight away (it showed for one frame each time it was re-applied).
+     * The rule is !important, so it also outranks the player's own inline styles. If the page
+     * made the <video> itself fullscreen, the browser pins its transform to none, so that case
+     * crops with object-fit: cover instead. Re-checks on video size changes and every second,
+     * because players resize and swap videos.
      */
     private const val FILL_JS = """
       (function () {
-        var on = %s;
-        if (window.__vidiaFillTimer) { clearInterval(window.__vidiaFillTimer); window.__vidiaFillTimer = null; }
-        var vids = function () { return Array.prototype.slice.call(document.querySelectorAll('video')); };
-        var reset = function (v) {
-          if (!v.__vidiaFill) return;
-          v.style.removeProperty('transform');
-          v.style.removeProperty('transform-origin');
-          v.__vidiaFill = false;
-        };
-        if (!on) { vids().forEach(reset); return; }
+        var on = %s, ATTR = 'data-vidia-fill', SHEET = 'vidia-fill-css';
+        var old = window.__vidiaFill;
+        if (old) {
+          clearInterval(old.timer);
+          document.removeEventListener('loadedmetadata', old.kick, true);
+          document.removeEventListener('resize', old.kick, true);
+          window.removeEventListener('resize', old.kick);
+          window.__vidiaFill = null;
+        }
+        var each = function (sel, fn) { Array.prototype.forEach.call(document.querySelectorAll(sel), fn); };
+        var sheet = document.getElementById(SHEET);
+        if (!on) {
+          if (sheet) sheet.remove();
+          each('video[' + ATTR + ']', function (v) { v.removeAttribute(ATTR); });
+          return;
+        }
+        if (!sheet) { sheet = document.createElement('style'); sheet.id = SHEET; }
         var pick = function () {
           var main = document.querySelector('video.html5-main-video');
           if (main && main.videoWidth) return main;
           var best = null, area = 0;
-          vids().forEach(function (v) {
+          each('video', function (v) {
             var cs = getComputedStyle(v);
             if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) === 0) return;
             if (cs.filter && cs.filter !== 'none') return;
@@ -93,19 +115,30 @@ class MainActivity : Activity() {
         };
         var apply = function () {
           var v = pick();
-          vids().forEach(function (o) { if (o !== v) reset(o); });
+          each('video[' + ATTR + ']', function (o) { if (o !== v) o.removeAttribute(ATTR); });
           if (!v) return;
-          var w = v.offsetWidth, h = v.offsetHeight, vw = v.videoWidth, vh = v.videoHeight;
-          if (!w || !h || !vw || !vh) return;
-          var k = Math.min(w / vw, h / vh);
-          var s = Math.max(window.innerWidth / (vw * k), window.innerHeight / (vh * k));
-          if (!isFinite(s) || s < 1.001) s = 1;
-          v.style.setProperty('transform-origin', '50%% 50%%', 'important');
-          v.style.setProperty('transform', 'scale(' + s.toFixed(4) + ')', 'important');
-          v.__vidiaFill = true;
+          var rule;
+          if (v === (document.fullscreenElement || document.webkitFullscreenElement)) {
+            rule = 'object-fit: cover !important;';
+          } else {
+            var w = v.offsetWidth, h = v.offsetHeight, vw = v.videoWidth, vh = v.videoHeight;
+            if (!w || !h || !vw || !vh) return;
+            var k = Math.min(w / vw, h / vh);
+            var s = Math.max(window.innerWidth / (vw * k), window.innerHeight / (vh * k));
+            if (!isFinite(s) || s < 1.001) s = 1;
+            rule = 'transform: scale(' + s.toFixed(4) + ') !important; transform-origin: 50%% 50%% !important;';
+          }
+          var css = 'html video[' + ATTR + '][' + ATTR + '] { ' + rule + ' }';
+          if (sheet.textContent !== css) sheet.textContent = css;
+          if (!sheet.isConnected) (document.head || document.documentElement).appendChild(sheet);
+          if (!v.hasAttribute(ATTR)) v.setAttribute(ATTR, '');
         };
+        var kick = function () { requestAnimationFrame(apply); };
+        document.addEventListener('loadedmetadata', kick, true);
+        document.addEventListener('resize', kick, true);
+        window.addEventListener('resize', kick);
         apply();
-        window.__vidiaFillTimer = setInterval(apply, 1000);
+        window.__vidiaFill = { timer: setInterval(apply, 1000), kick: kick };
       })();
     """
 
@@ -123,6 +156,8 @@ class MainActivity : Activity() {
   }
 
   private lateinit var root: FrameLayout
+  private lateinit var safeArea: FrameLayout
+  private var lastInsets: WindowInsets? = null
   private lateinit var webView: WebView
   private lateinit var urlBar: EditText
   private lateinit var progress: ProgressBar
@@ -216,7 +251,10 @@ class MainActivity : Activity() {
     toolbar.addView(toolbarButton("←") { if (webView.canGoBack()) webView.goBack() })
     toolbar.addView(toolbarButton("→") { if (webView.canGoForward()) webView.goForward() })
     toolbar.addView(toolbarButton("⟳") { webView.reload() })
-    toolbar.addView(toolbarButton("⌂") { load(HOME) })
+    toolbar.addView(toolbarButton("⌂") { load(HOME) }.apply {
+      // Long-press: how far the browser stays from the screen's right edge (curved car screens).
+      setOnLongClickListener { showEdgeDialog(); true }
+    })
     toolbar.addView(urlBar, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
       marginStart = dp(8); marginEnd = dp(8)
     })
@@ -238,10 +276,17 @@ class MainActivity : Activity() {
       addView(webView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
     }
 
+    // Keeps the browser inside the part of the screen you can see (see applySafeArea). Any margin
+    // it leaves is black, so it blends into the screen's edge.
+    safeArea = FrameLayout(this).apply {
+      setBackgroundColor(Color.BLACK)
+      addView(column)
+    }
+
     // The area behind the car's status bar shows the toolbar colour.
     root = FrameLayout(this).apply {
       setBackgroundColor(Color.rgb(32, 33, 36))
-      addView(column)
+      addView(safeArea)
     }
     setContentView(root)
   }
@@ -314,6 +359,11 @@ class MainActivity : Activity() {
       override fun onPageFinished(view: WebView, url: String) {
         if (!urlBar.hasFocus()) urlBar.setText(displayUrl(url))
         CookieManager.getInstance().flush()
+      }
+
+      // Sites like YouTube change pages without a full load, so keep the address bar in step.
+      override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+        if (!urlBar.hasFocus()) urlBar.setText(displayUrl(url))
       }
     }
 
@@ -454,23 +504,33 @@ class MainActivity : Activity() {
     if (::fillToolbarButton.isInitialized) fillToolbarButton.text = if (fillMode) "Fill" else "Fit"
   }
 
+  /** Space the car keeps for its bars and any curved or cut screen edge, shown or hidden. */
   @Suppress("DEPRECATION")
-  private fun reservedTopLeft(insets: WindowInsets): Pair<Int, Int> =
+  private fun reservedEdges(insets: WindowInsets): Insets =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-      val r = insets.getInsetsIgnoringVisibility(
+      insets.getInsetsIgnoringVisibility(
         WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
-      r.left to r.top
-    } else insets.systemWindowInsetLeft to insets.systemWindowInsetTop
+    } else {
+      val cut = insets.displayCutout
+      Insets.of(
+        maxOf(insets.stableInsetLeft, cut?.safeInsetLeft ?: 0),
+        maxOf(insets.stableInsetTop, cut?.safeInsetTop ?: 0),
+        maxOf(insets.stableInsetRight, cut?.safeInsetRight ?: 0),
+        maxOf(insets.stableInsetBottom, cut?.safeInsetBottom ?: 0))
+    }
+
+  private fun reservedTopLeft(insets: WindowInsets): Pair<Int, Int> =
+    reservedEdges(insets).let { it.left to it.top }
 
   private fun showFullscreenInfo() {
     val frame = fullscreenFrame ?: return
-    val insets = frame.rootWindowInsets
-    val (left, top) = insets?.let { reservedTopLeft(it) } ?: (0 to 0)
+    val r = frame.rootWindowInsets?.let { reservedEdges(it) } ?: Insets.NONE
     val loc = IntArray(2).also { frame.getLocationOnScreen(it) }
     val screen = resources.displayMetrics
     Toast.makeText(this,
       "Fullscreen ${frame.width}×${frame.height} at ${loc[0]},${loc[1]} · " +
-        "screen ${screen.widthPixels}×${screen.heightPixels} · reserved left $left, top $top",
+        "screen ${screen.widthPixels}×${screen.heightPixels} · " +
+        "reserved left ${r.left}, top ${r.top}, right ${r.right}, bottom ${r.bottom}",
       Toast.LENGTH_LONG).show()
   }
 
@@ -486,15 +546,98 @@ class MainActivity : Activity() {
   private fun applyBaseWindowLayout() {
     // Same setup FlutterActivity (and so Plezy) uses: the window always extends behind the car's
     // status bar, which floats over it. That lets fullscreen video use the bar's space once the
-    // bar hides. Our own UI is padded down so the toolbar sits below the bar.
+    // bar hides. Our own UI is kept inside the visible area by applySafeArea.
     window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
     window.statusBarColor = Color.TRANSPARENT
     window.decorView.systemUiVisibility = BASE_UI_FLAGS
-    root.setOnApplyWindowInsetsListener { v, insets ->
-      v.setPadding(0, statusBarTop(insets), 0, 0)
+    root.setOnApplyWindowInsetsListener { _, insets ->
+      lastInsets = insets
+      applySafeArea()
       insets
     }
     root.requestApplyInsets()
+  }
+
+  /**
+   * Keeps the toolbar and page inside the part of the screen you can actually see. The window
+   * draws behind the car's bars (see applyBaseWindowLayout), so every side is padded, not just
+   * the top: below the status bar, clear of any bar, curved edge or cutout the car reports on the
+   * other sides, and above the on-screen keyboard. A right-edge margin set with long-press ⌂
+   * replaces the reported one, for screens like the Blazer EV's slanted right edge when the car
+   * doesn't report it. Fullscreen video is separate and still uses the whole panel.
+   */
+  private fun applySafeArea() {
+    val insets = lastInsets ?: return
+    val edges = reservedEdges(insets)
+    val manualRight = prefs.getInt(KEY_EDGE, -1)
+    root.setPadding(0, statusBarTop(insets), 0, 0)
+    safeArea.setPadding(
+      edges.left,
+      0,
+      if (manualRight >= 0) dp(manualRight) else edges.right,
+      maxOf(edges.bottom, imeBottom(insets)))
+  }
+
+  @Suppress("DEPRECATION")
+  private fun imeBottom(insets: WindowInsets): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) insets.getInsets(WindowInsets.Type.ime()).bottom
+    else insets.systemWindowInsetBottom
+
+  private fun pxToDp(px: Int) = (px / resources.displayMetrics.density).roundToInt()
+
+  /**
+   * Long-press ⌂: a slider for how far the browser stays from the screen's right edge, applied
+   * live while dragging and remembered. Also shows what the car itself reports for that edge.
+   */
+  private fun showEdgeDialog() {
+    val insets = lastInsets
+    val reported = insets?.let { pxToDp(reservedEdges(it).right) } ?: 0
+    val corner = if (insets != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+      insets.getRoundedCorner(RoundedCorner.POSITION_TOP_RIGHT)?.let { pxToDp(it.radius) } else null
+    val start = prefs.getInt(KEY_EDGE, -1).takeIf { it >= 0 } ?: reported
+
+    val builder = AlertDialog.Builder(this)
+    val ctx = builder.context
+    val label = TextView(ctx).apply {
+      textSize = 18f
+      setPadding(dp(24), dp(12), dp(24), 0)
+    }
+    fun describe(value: Int) {
+      label.text = "Right edge: $value dp\n" +
+        "Drag until the toolbar's right-hand buttons are fully visible.\n" +
+        "The car reports $reported dp" + (corner?.let { ", top-right corner radius $it dp" } ?: "") + "."
+    }
+    describe(start)
+    val slider = SeekBar(ctx).apply {
+      max = 300
+      progress = start
+      setPadding(dp(32), dp(24), dp(32), dp(24))
+      setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
+          if (!fromUser) return
+          prefs.edit().putInt(KEY_EDGE, value).apply()
+          applySafeArea()
+          describe(value)
+        }
+        override fun onStartTrackingTouch(bar: SeekBar) {}
+        override fun onStopTrackingTouch(bar: SeekBar) {}
+      })
+    }
+    val content = LinearLayout(ctx).apply {
+      orientation = LinearLayout.VERTICAL
+      addView(label)
+      addView(slider)
+    }
+    builder
+      .setTitle("Screen edge")
+      .setView(content)
+      .setPositiveButton("Done", null)
+      .setNeutralButton("Use the car's edge") { _, _ ->
+        prefs.edit().remove(KEY_EDGE).apply()
+        applySafeArea()
+      }
+      .show()
+      .window?.setDimAmount(0.1f) // keep the toolbar visible behind it as a live preview
   }
 
   @Suppress("DEPRECATION")
